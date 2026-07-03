@@ -50,7 +50,8 @@ def test_get_provider_redis_down_returns_default():
 
 
 def test_set_provider_saves_to_redis():
-    with patch("bot.preferences.store") as mock_store:
+    with patch("bot.preferences.store") as mock_store, \
+         patch("bot.preferences.HF_SPACE_ID", "fake/space"):
         from bot.preferences import set_provider
         assert set_provider(123, "hf") is True
         mock_store.set.assert_called_once_with("provider:123", "hf")

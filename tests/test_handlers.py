@@ -415,7 +415,9 @@ def test_resolve_model_matches_key_and_name():
 # ── /model command ──────────────────────────────────────────────────────────────
 
 
-def test_cmd_model_no_args_shows_current_single_model():
+def test_cmd_model_no_args_shows_current_and_hint_without_hf():
+    """Even without HF, main + the alternate Cerebras model give >1 option,
+    so the no-arg /model reports the current model and hints how to switch."""
     from bot.handlers import cmd_model
 
     with (
@@ -426,7 +428,8 @@ def test_cmd_model_no_args_shows_current_single_model():
     ):
         cmd_model(make_message(text="/model"))
         sent = mock_bot.send_message.call_args[0][1]
-        assert sent == "Current model: gpt-oss-120b"
+        assert "Current model: gpt-oss-120b" in sent
+        assert "/models" in sent
 
 
 def test_cmd_model_no_args_hints_switch_when_multiple():
@@ -538,20 +541,24 @@ def test_cmd_models_lists_all_with_active_marker():
         assert "active" not in main_line
 
 
-def test_cmd_models_single_model_no_switch_hint():
+def test_cmd_models_lists_cerebras_models_and_switch_hint_without_hf():
+    """Without HF there are still two Cerebras models, so /models lists both,
+    marks the active one, and shows the switch hint."""
     from bot.handlers import cmd_models
 
     with (
         patch("bot.handlers.HF_SPACE_ID", ""),
-        patch("bot.handlers.MODEL", "qwen-3-235b-a22b-instruct-2507"),
+        patch("bot.handlers.MODEL", "gpt-oss-120b"),
         patch("bot.handlers.get_provider", return_value="main"),
         patch("bot.handlers.bot") as mock_bot,
     ):
         cmd_models(make_message(text="/models"))
         sent = mock_bot.send_message.call_args[0][1]
-        main_line = next(line for line in sent.splitlines() if "qwen-3-235b-a22b-instruct-2507" in line)
+        main_line = next(line for line in sent.splitlines() if "gpt-oss-120b" in line)
+        qwen_line = next(line for line in sent.splitlines() if "qwen-3-235b-a22b-instruct-2507" in line)
         assert "active" in main_line
-        assert "Switch with" not in sent
+        assert "active" not in qwen_line
+        assert "Switch with" in sent
 
 
 def test_handle_message_uses_keep_typing():
