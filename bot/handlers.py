@@ -2,6 +2,7 @@ import json
 import os
 import random
 from datetime import datetime
+from io import BytesIO
 
 from bot.clients import bot, BOT_INFO, store
 from bot.config import COMMIT_SHA, HF_SPACE_ID, HOSTING_LABEL, MODEL, RATE_LIMIT
@@ -70,7 +71,7 @@ COMMANDS = [
     ("review", "get a short code review"),
     ("quiz", "take a quick quiz on a topic"),
     ("summarize", "summarize a block of text"),
-    ("convert", "convert text/data between formats"),
+    ("convert", "convert text/data (or make a PDF)"),
     ("roadmap", "get a beginner→advanced learning path"),
     ("streak", "track your daily learning streak"),
     ("interview", "practice a mock technical interview"),
@@ -490,24 +491,81 @@ def cmd_summarize(message):
     bot.send_message(message.chat.id, reply)
 
 
+def _build_pdf_bytes(text: str, title: str = "Converted") -> bytes:
+    """Render `text` into a single-page-flowing PDF and return the bytes.
+
+    Uses fpdf2 (pure Python, no system libraries — installs cleanly on the
+    PythonAnywhere free tier). fpdf's core fonts are Latin-1 only, so any
+    character outside that range (emoji, Armenian, CJK, …) is replaced with
+    "?" rather than crashing generation."""
+    from fpdf import FPDF
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    pdf.set_font("Helvetica", style="B", size=15)
+    safe_title = title.encode("latin-1", "replace").decode("latin-1")
+    pdf.multi_cell(0, 10, safe_title)
+    pdf.ln(2)
+    pdf.set_font("Helvetica", size=12)
+    safe_body = (text or "").encode("latin-1", "replace").decode("latin-1")
+    pdf.multi_cell(0, 7, safe_body)
+    # fpdf2's output() returns a bytearray; normalize to immutable bytes.
+    return bytes(pdf.output())
+
+
+def _send_as_pdf(message, text: str) -> None:
+    """Build a PDF from `text` and send it to the chat as a document."""
+    try:
+        data = _build_pdf_bytes(text)
+    except ImportError:
+        bot.send_message(
+            message.chat.id,
+            "PDF export needs the fpdf2 package, which isn't installed on this bot.",
+        )
+        return
+    except Exception as e:
+        print(f"PDF generation failed: {e}")
+        bot.send_message(
+            message.chat.id, "Sorry, I couldn't build that PDF. Please try again."
+        )
+        return
+    buf = BytesIO(data)
+    buf.name = "converted.pdf"
+    bot.send_document(
+        message.chat.id,
+        buf,
+        visible_file_name="converted.pdf",
+        caption="Here's your PDF ✅",
+    )
+
+
 @bot.message_handler(commands=["convert"], func=is_allowed)
 def cmd_convert(message):
-    """Convert text/data between formats (JSON, CSV, YAML, plain text, …).
+    """Convert text/data between formats, or export it as a real PDF file.
 
-    Usage: /convert <target-format> <data>. Binary formats like images
-    aren't supported over a text chat — this handles textual data only."""
+    Usage: /convert <target-format> <data>.
+    - `/convert pdf <text>` builds an actual .pdf and sends it as a file.
+    - Any other target (json, csv, yaml, xml, markdown, …) is converted as
+      text by the AI. Image/binary source conversion isn't available over
+      a text chat."""
     parts = (message.text or "").split(maxsplit=2)
     if len(parts) < 3 or not parts[2].strip():
         bot.send_message(
             message.chat.id,
             "Usage: /convert <target-format> <data>\n"
-            'Example: /convert json name: Alice, age: 30\n\n'
-            "Supported: text, JSON, CSV, YAML, XML, Markdown table. "
+            "Examples:\n"
+            "• /convert pdf My notes for today...\n"
+            "• /convert json name: Alice, age: 30\n\n"
+            "Supported: pdf (sent as a file), text, JSON, CSV, YAML, XML, Markdown table. "
             "(Image/binary conversion isn't available over chat.)",
         )
         return
     target = parts[1].strip()
     data = parts[2].strip()
+    if target.lower() == "pdf":
+        _send_as_pdf(message, data)
+        return
     reply = ask_ai(
         message.from_user.id,
         f"Convert the following data into {target} format. "

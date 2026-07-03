@@ -253,6 +253,79 @@ def test_cmd_summarize_no_text_shows_usage():
         assert "Usage" in mock_bot.send_message.call_args[0][1]
 
 
+# ── /convert ──────────────────────────────────────────────────────────────────
+
+
+def test_cmd_convert_no_args_shows_usage():
+    with (
+        patch("bot.handlers.ask_ai") as mock_ask,
+        patch("bot.handlers.bot") as mock_bot,
+    ):
+        from bot.handlers import cmd_convert
+
+        cmd_convert(make_message(text="/convert"))
+        mock_ask.assert_not_called()
+        assert "Usage" in mock_bot.send_message.call_args[0][1]
+
+
+def test_cmd_convert_text_format_uses_ai():
+    """A non-pdf target is converted as text by the AI and sent as a message."""
+    with (
+        patch("bot.handlers.ask_ai", return_value="```json\n{}\n```") as mock_ask,
+        patch("bot.handlers.bot") as mock_bot,
+    ):
+        from bot.handlers import cmd_convert
+
+        cmd_convert(make_message(text="/convert json name: Alice, age: 30"))
+        prompt = mock_ask.call_args[0][1]
+        assert "json" in prompt.lower()
+        assert "name: Alice, age: 30" in prompt
+        mock_bot.send_message.assert_called_once()
+        mock_bot.send_document.assert_not_called()
+
+
+def test_cmd_convert_pdf_sends_document():
+    """`/convert pdf <text>` builds a PDF and sends it via send_document,
+    not as a text message."""
+    with (
+        patch("bot.handlers.ask_ai") as mock_ask,
+        patch("bot.handlers._build_pdf_bytes", return_value=b"%PDF-1.4 fake") as mock_pdf,
+        patch("bot.handlers.bot") as mock_bot,
+    ):
+        from bot.handlers import cmd_convert
+
+        cmd_convert(make_message(text="/convert pdf hello world"))
+        mock_ask.assert_not_called()  # PDF path doesn't call the AI
+        mock_pdf.assert_called_once_with("hello world")
+        mock_bot.send_document.assert_called_once()
+        assert mock_bot.send_document.call_args[0][0] == 456
+        assert mock_bot.send_document.call_args.kwargs["visible_file_name"] == "converted.pdf"
+
+
+def test_build_pdf_bytes_produces_valid_pdf():
+    """_build_pdf_bytes returns real PDF bytes and never crashes on
+    non-Latin-1 characters (emoji / Armenian)."""
+    from bot.handlers import _build_pdf_bytes
+
+    data = _build_pdf_bytes("Hello, PDF! Ω Հայերեն 🎉")
+    assert isinstance(data, bytes)
+    assert data[:4] == b"%PDF"
+
+
+def test_cmd_convert_pdf_reports_missing_dependency():
+    """If fpdf2 isn't installed the PDF path degrades to a clear message
+    rather than raising."""
+    with (
+        patch("bot.handlers._build_pdf_bytes", side_effect=ImportError("no fpdf")),
+        patch("bot.handlers.bot") as mock_bot,
+    ):
+        from bot.handlers import cmd_convert
+
+        cmd_convert(make_message(text="/convert pdf hi"))
+        mock_bot.send_document.assert_not_called()
+        assert "fpdf2" in mock_bot.send_message.call_args[0][1]
+
+
 # ── /about ────────────────────────────────────────────────────────────────────
 
 
