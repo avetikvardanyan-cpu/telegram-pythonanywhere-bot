@@ -789,6 +789,67 @@ def test_edit_image_raises_when_no_backend_configured():
             bot.handlers._edit_image("p", b"img")
 
 
+# --- Armenian prompt translation for /image + /edit -------------------------
+
+def test_has_armenian_detects_armenian_and_ignores_english():
+    import bot.handlers
+
+    assert bot.handlers._has_armenian("կատու ձյան մեջ") is True
+    assert bot.handlers._has_armenian("a cat in the snow") is False
+    assert bot.handlers._has_armenian("") is False
+
+
+def test_translate_prompt_translates_armenian_via_ai():
+    """An Armenian prompt is routed through the chat model and the English
+    translation is what reaches the image backend."""
+    import bot.handlers
+
+    with patch(
+        "bot.providers._call_main", return_value="a cat in the snow"
+    ) as mock_ai:
+        out = bot.handlers._translate_prompt_for_image("կատու ձյան մեջ")
+        assert out == "a cat in the snow"
+        mock_ai.assert_called_once()
+
+
+def test_translate_prompt_skips_english_without_ai_call():
+    """English prompts never incur a translation round-trip."""
+    import bot.handlers
+
+    with patch("bot.providers._call_main") as mock_ai:
+        out = bot.handlers._translate_prompt_for_image("a cat in the snow")
+        assert out == "a cat in the snow"
+        mock_ai.assert_not_called()
+
+
+def test_translate_prompt_falls_back_to_original_on_failure():
+    """If translation errors, /image still runs on the original prompt."""
+    import bot.handlers
+
+    with patch("bot.providers._call_main", side_effect=RuntimeError("down")):
+        out = bot.handlers._translate_prompt_for_image("կատու")
+        assert out == "կատու"
+
+
+def test_generate_image_translates_armenian_prompt():
+    """_generate_image translates before handing off to the backend."""
+    import bot.handlers
+
+    with (
+        patch("bot.handlers.TOGETHER_API_KEY", "tk"),
+        patch(
+            "bot.handlers._translate_prompt_for_image", return_value="translated"
+        ) as mock_tr,
+        patch(
+            "bot.handlers._generate_image_together", return_value=b"img"
+        ) as mock_gen,
+    ):
+        assert bot.handlers._generate_image("կատու") == b"img"
+        mock_tr.assert_called_once_with("կատու")
+        mock_gen.assert_called_once()
+        assert mock_gen.call_args.args[0] == "translated"
+
+
 # --- /help (one message per category) --------------------------------------
 
 

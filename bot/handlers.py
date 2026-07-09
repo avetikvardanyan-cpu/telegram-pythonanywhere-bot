@@ -2227,6 +2227,53 @@ class _RateLimited(Exception):
     """Internal sentinel: a 429 that we intend to retry."""
 
 
+# Armenian block (U+0530–U+058F) plus the Armenian ligatures (U+FB13–U+FB17).
+_ARMENIAN_RE = re.compile(r"[԰-֏ﬓ-ﬗ]")
+
+
+def _has_armenian(text: str) -> bool:
+    return bool(_ARMENIAN_RE.search(text or ""))
+
+
+def _translate_prompt_for_image(prompt: str) -> str:
+    """Translate a non-English (currently: Armenian) image prompt to English.
+
+    The image backends (FLUX / Cloudflare / pollinations) follow English
+    prompts well but largely ignore Armenian, so an Armenian prompt would
+    produce an unrelated picture. We route the prompt through the main
+    Cerebras chat model for a quick literal translation first.
+
+    Best-effort only: if there's no Armenian text, or the translation call
+    fails for any reason, we return the original prompt unchanged so /image
+    never breaks just because translation was unavailable.
+    """
+    if not _has_armenian(prompt):
+        return prompt
+    from bot.providers import _call_main
+
+    try:
+        translated = _call_main(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "You translate image-generation prompts into English. "
+                        "Reply with ONLY the English translation of the prompt "
+                        "— no quotes, no explanation, no extra text. Preserve "
+                        "the visual detail; do not add or remove anything."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            retries=1,
+        )
+    except Exception as e:
+        print(f"prompt translation failed, using original: {e}")
+        return prompt
+    translated = (translated or "").strip().strip('"').strip()
+    return translated or prompt
+
+
 def _generate_image_together(prompt, width=1024, height=1024):
     """Generate an image via Together AI's OpenAI-compatible images endpoint.
     Requests b64_json so we get the bytes directly (no second fetch to a CDN
@@ -2304,6 +2351,7 @@ def _generate_image_pollinations(prompt, width=1024, height=1024):
 def _generate_image(prompt, width=1024, height=1024):
     """Pick the first configured image backend. All are free; whichever key(s)
     are set win, else fall back to keyless pollinations."""
+    prompt = _translate_prompt_for_image(prompt)
     if TOGETHER_API_KEY:
         return _generate_image_together(prompt, width, height)
     if CF_ACCOUNT_ID and CF_API_TOKEN:
@@ -2481,6 +2529,7 @@ def _edit_image(prompt, image_bytes):
     OpenAI-compatible img2img backends. Unlike _generate_image there is no
     keyless *text-to-image* fallback — editing needs a real edit backend — so
     raise a clear message when none is configured."""
+    prompt = _translate_prompt_for_image(prompt)
     if HF_EDIT_SPACE:
         return _edit_image_hf(prompt, image_bytes)
     if TOGETHER_API_KEY:

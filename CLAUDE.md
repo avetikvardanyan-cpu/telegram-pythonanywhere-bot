@@ -150,6 +150,13 @@ To switch to a different HF space, change `HF_SPACE_ID` and confirm the target s
 
 ---
 
+## Language handling (Armenian)
+
+The bot works in Armenian end-to-end:
+
+- **Chat + all AI-backed commands** — `SYSTEM_PROMPT` (`bot/config.py`) instructs the model to reply in the language of the *student's own words* (their topic/question/content), not the language of the English instruction template each command wraps around it. So `/explain ռեկուրսիա` answers in Armenian while `/explain recursion` answers in English. Every AI command routes through `ask_ai()`, so this one directive covers them all. Code/API names/technical terms stay in their standard (English) form even inside an Armenian reply.
+- **`/image` + `/edit`** — image backends (FLUX / Cloudflare / pollinations) follow English prompts but largely ignore Armenian, so `_translate_prompt_for_image()` in `bot/handlers.py` detects Armenian text (`_has_armenian`, Unicode block U+0530–U+058F + ligatures U+FB13–U+FB17) and translates it to English via a one-shot `_call_main()` call before dispatch. It's best-effort: English prompts skip the round-trip entirely, and any translation failure falls back to the original prompt so `/image` never breaks. Both `_generate_image()` and `_edit_image()` translate at the top.
+
 ## Image commands
 
 - **`/image <prompt>`** — text-to-image. `_generate_image()` in `bot/handlers.py` picks the first configured backend: Together AI → Cloudflare Workers AI → keyless pollinations.ai (the zero-config fallback). All three are free-tier friendly.
