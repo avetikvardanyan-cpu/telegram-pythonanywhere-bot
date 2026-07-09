@@ -28,6 +28,7 @@ from bot.config import (
     HF_SPACE_ID,
     HF_TOKEN,
     HOSTING_LABEL,
+    IMAGE_TRANSLATE_MODEL,
     MODEL,
     RATE_LIMIT,
     TOGETHER_API_KEY,
@@ -2273,25 +2274,31 @@ def _translate_prompt_for_image(prompt: str) -> str:
         return prompt
     from bot.providers import _call_main
 
-    try:
-        translated = _call_main(
-            [
-                {"role": "system", "content": _TRANSLATE_SYSTEM},
-                {"role": "user", "content": "կատու ձյան մեջ մայրամուտին"},
-                {"role": "assistant", "content": "a cat in the snow at sunset"},
-                {"role": "user", "content": prompt},
-            ],
-            retries=1,
-        )
-    except Exception as e:
-        print(f"prompt translation failed, using original: {e}")
-        return prompt
-    translated = _clean_translation(translated)
-    if not translated or _has_armenian(translated):
-        # Empty or not actually translated — don't hand the backend garbage.
-        print("prompt translation produced no usable English, using original")
-        return prompt
-    return translated
+    messages = [
+        {"role": "system", "content": _TRANSLATE_SYSTEM},
+        {"role": "user", "content": "կատու ձյան մեջ մայրամուտին"},
+        {"role": "assistant", "content": "a cat in the snow at sunset"},
+        {"role": "user", "content": prompt},
+    ]
+    # Prefer the dedicated translation model (gemma-4-31b is accurate on
+    # Armenian; the chat MODEL / gpt-oss-120b is not), then fall back to MODEL
+    # if that id isn't available on this key. Dedupe so we don't call twice.
+    candidates = []
+    for m in (IMAGE_TRANSLATE_MODEL, MODEL):
+        if m and m not in candidates:
+            candidates.append(m)
+    for model in candidates:
+        try:
+            translated = _call_main(messages, retries=1, model=model)
+        except Exception as e:
+            print(f"prompt translation via '{model}' failed: {e}")
+            continue
+        translated = _clean_translation(translated)
+        if translated and not _has_armenian(translated):
+            return translated
+        # Empty or not actually translated — try the next model.
+        print(f"prompt translation via '{model}' gave no usable English")
+    return prompt
 
 
 def _generate_image_together(prompt, width=1024, height=1024):

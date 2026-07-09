@@ -84,6 +84,16 @@ AI_API_KEY = os.environ["AI_API_KEY"].strip()
 AI_BASE_URL = os.environ.get("AI_BASE_URL", "https://api.cerebras.ai/v1").strip()
 MODEL = os.environ.get("AI_MODEL", "gpt-oss-120b").strip()
 
+# Model used to translate non-English (currently Armenian) /image and /edit
+# prompts into English before they hit the image backend. This is deliberately
+# NOT the chat MODEL: gpt-oss-120b translates Armenian poorly (it dropped
+# "elephant" and hallucinated "crater"/"pumpkin" in testing), whereas
+# gemma-4-31b renders Armenian prompts accurately. If the account can't access
+# this id, _translate_prompt_for_image() falls back to MODEL, then to the
+# original prompt, so /image never breaks. Set IMAGE_TRANSLATE_MODEL="" to
+# disable the dedicated translator and just use MODEL.
+IMAGE_TRANSLATE_MODEL = os.environ.get("IMAGE_TRANSLATE_MODEL", "gemma-4-31b").strip()
+
 # Extra Cerebras model ids the account can access, offered as switchable
 # options by /model and /models (comma-separated). Empty by default — only add
 # ids your AI_API_KEY actually has access to, or /model <id> will 404 and fall

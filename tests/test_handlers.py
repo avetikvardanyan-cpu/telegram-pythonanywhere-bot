@@ -850,6 +850,39 @@ def test_translate_prompt_strips_wrapping_quotes():
         assert bot.handlers._translate_prompt_for_image("կարմիր մեքենա") == "a red car"
 
 
+def test_translate_prompt_prefers_dedicated_model():
+    """Translation uses IMAGE_TRANSLATE_MODEL (accurate on Armenian), not the
+    chat MODEL which mistranslates it."""
+    import bot.handlers
+
+    with (
+        patch("bot.handlers.IMAGE_TRANSLATE_MODEL", "gemma-4-31b"),
+        patch("bot.handlers.MODEL", "gpt-oss-120b"),
+        patch("bot.providers._call_main", return_value="an elephant") as mock_ai,
+    ):
+        out = bot.handlers._translate_prompt_for_image("փիղ")
+        assert out == "an elephant"
+        assert mock_ai.call_args.kwargs["model"] == "gemma-4-31b"
+
+
+def test_translate_prompt_falls_back_to_chat_model_when_dedicated_unavailable():
+    """If the dedicated model 404s, fall back to MODEL rather than giving up."""
+    import bot.handlers
+
+    def fake(messages, retries=1, model=None):
+        if model == "gemma-4-31b":
+            raise RuntimeError("model_not_found")
+        return "an elephant on mars"
+
+    with (
+        patch("bot.handlers.IMAGE_TRANSLATE_MODEL", "gemma-4-31b"),
+        patch("bot.handlers.MODEL", "gpt-oss-120b"),
+        patch("bot.providers._call_main", side_effect=fake),
+    ):
+        out = bot.handlers._translate_prompt_for_image("փիղ Մարսի վրա")
+        assert out == "an elephant on mars"
+
+
 def test_generate_image_translates_armenian_prompt():
     """_generate_image translates before handing off to the backend."""
     import bot.handlers
