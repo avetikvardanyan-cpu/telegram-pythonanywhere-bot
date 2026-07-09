@@ -2235,6 +2235,23 @@ def _has_armenian(text: str) -> bool:
     return bool(_ARMENIAN_RE.search(text or ""))
 
 
+_TRANSLATE_SYSTEM = (
+    "You are a translation engine for image-generation prompts. Translate the "
+    "user's text into natural, descriptive English suitable for an image model. "
+    "Rules, always: output ONLY the English translation as a plain phrase — no "
+    "quotes, no markdown, no preamble, no notes, no explanations. NEVER ask for "
+    "clarification and NEVER refuse; if the text is short, misspelled, or "
+    "ambiguous, translate it as literally as you can anyway. Preserve every "
+    "visual detail and do not add, drop, or reinterpret anything. Words already "
+    "in English stay unchanged. Proper names stay as-is."
+)
+
+
+def _clean_translation(text: str) -> str:
+    """Strip wrapping quotes/backticks/whitespace a model sometimes adds."""
+    return (text or "").strip().strip("\"'`").strip()
+
+
 def _translate_prompt_for_image(prompt: str) -> str:
     """Translate a non-English (currently: Armenian) image prompt to English.
 
@@ -2243,9 +2260,14 @@ def _translate_prompt_for_image(prompt: str) -> str:
     produce an unrelated picture. We route the prompt through the main
     Cerebras chat model for a quick literal translation first.
 
-    Best-effort only: if there's no Armenian text, or the translation call
-    fails for any reason, we return the original prompt unchanged so /image
-    never breaks just because translation was unavailable.
+    A one-shot example is included so the reasoning model reliably behaves as a
+    pure translator (just the English phrase) instead of answering
+    conversationally — the failure mode that produced unrelated images.
+
+    Best-effort only: if there's no Armenian text, if the call fails, or if the
+    model gives back something unusable (empty, or still containing Armenian —
+    i.e. it didn't actually translate), we return the original prompt unchanged
+    so /image never breaks or gets *worse* because translation misbehaved.
     """
     if not _has_armenian(prompt):
         return prompt
@@ -2254,15 +2276,9 @@ def _translate_prompt_for_image(prompt: str) -> str:
     try:
         translated = _call_main(
             [
-                {
-                    "role": "system",
-                    "content": (
-                        "You translate image-generation prompts into English. "
-                        "Reply with ONLY the English translation of the prompt "
-                        "— no quotes, no explanation, no extra text. Preserve "
-                        "the visual detail; do not add or remove anything."
-                    ),
-                },
+                {"role": "system", "content": _TRANSLATE_SYSTEM},
+                {"role": "user", "content": "կատու ձյան մեջ մայրամուտին"},
+                {"role": "assistant", "content": "a cat in the snow at sunset"},
                 {"role": "user", "content": prompt},
             ],
             retries=1,
@@ -2270,8 +2286,12 @@ def _translate_prompt_for_image(prompt: str) -> str:
     except Exception as e:
         print(f"prompt translation failed, using original: {e}")
         return prompt
-    translated = (translated or "").strip().strip('"').strip()
-    return translated or prompt
+    translated = _clean_translation(translated)
+    if not translated or _has_armenian(translated):
+        # Empty or not actually translated — don't hand the backend garbage.
+        print("prompt translation produced no usable English, using original")
+        return prompt
+    return translated
 
 
 def _generate_image_together(prompt, width=1024, height=1024):

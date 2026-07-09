@@ -831,6 +831,25 @@ def test_translate_prompt_falls_back_to_original_on_failure():
         assert out == "կատու"
 
 
+def test_translate_prompt_falls_back_when_output_untranslated():
+    """If the model hands back Armenian (didn't actually translate) or an empty
+    string, use the original prompt rather than feeding the backend garbage."""
+    import bot.handlers
+
+    with patch("bot.providers._call_main", return_value="կատու"):
+        assert bot.handlers._translate_prompt_for_image("կատու") == "կատու"
+    with patch("bot.providers._call_main", return_value="  "):
+        assert bot.handlers._translate_prompt_for_image("կատու") == "կատու"
+
+
+def test_translate_prompt_strips_wrapping_quotes():
+    """Quotes/backticks a model wraps around the translation are stripped."""
+    import bot.handlers
+
+    with patch("bot.providers._call_main", return_value='"a red car"'):
+        assert bot.handlers._translate_prompt_for_image("կարմիր մեքենա") == "a red car"
+
+
 def test_generate_image_translates_armenian_prompt():
     """_generate_image translates before handing off to the backend."""
     import bot.handlers
