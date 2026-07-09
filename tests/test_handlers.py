@@ -31,8 +31,46 @@ def test_handle_message_calls_ask_ai():
 
         msg = make_message(text="hello")
         handle_message(msg)
-        mock_ask.assert_called_once_with(123, "hello")
+        # English text -> no model override, use the user's saved model
+        mock_ask.assert_called_once_with(123, "hello", provider=None)
         mock_send.assert_called_once_with(msg, "AI reply")
+
+
+def test_handle_message_armenian_switches_to_armenian_model():
+    """An Armenian message is answered with ARMENIAN_MODEL for that turn without
+    changing the user's saved model."""
+    with (
+        patch("bot.handlers.should_respond", return_value=True),
+        patch("bot.handlers.is_rate_limited", return_value=False),
+        patch("bot.handlers.BOT_INFO", MagicMock(username="testbot")),
+        patch("bot.handlers.ARMENIAN_MODEL", "gemma-4-31b"),
+        patch("bot.handlers.get_provider", return_value="main"),
+        patch("bot.handlers.ask_ai", return_value="բարև") as mock_ask,
+        patch("bot.handlers.send_reply"),
+        patch("bot.handlers.bot"),
+    ):
+        from bot.handlers import handle_message
+
+        handle_message(make_message(text="Բարև, ինչպե՞ս ես"))
+        assert mock_ask.call_args.kwargs["provider"] == "gemma-4-31b"
+
+
+def test_handle_message_armenian_keeps_model_when_already_armenian():
+    """If the user already chose ARMENIAN_MODEL, don't override (keep the same)."""
+    with (
+        patch("bot.handlers.should_respond", return_value=True),
+        patch("bot.handlers.is_rate_limited", return_value=False),
+        patch("bot.handlers.BOT_INFO", MagicMock(username="testbot")),
+        patch("bot.handlers.ARMENIAN_MODEL", "gemma-4-31b"),
+        patch("bot.handlers.get_provider", return_value="gemma-4-31b"),
+        patch("bot.handlers.ask_ai", return_value="բարև") as mock_ask,
+        patch("bot.handlers.send_reply"),
+        patch("bot.handlers.bot"),
+    ):
+        from bot.handlers import handle_message
+
+        handle_message(make_message(text="Բարև"))
+        assert mock_ask.call_args.kwargs["provider"] is None
 
 
 def test_handle_message_skips_when_not_responding():
@@ -386,6 +424,34 @@ def test_available_models_includes_alt_and_hf_when_configured():
         assert keys == ["main", "llama3.1-8b", "hf"]
 
 
+def test_available_models_default_offers_gemma_and_glm_with_descriptions():
+    """The default registry offers the extra Cerebras models with their
+    strengths, so /model and /help can present them."""
+    import bot.handlers
+
+    with patch("bot.handlers.HF_SPACE_ID", ""):
+        models = bot.handlers.available_models()
+        keys = [m["key"] for m in models]
+        assert "gemma-4-31b" in keys
+        assert "zai-glm-4.7" in keys
+        gemma = next(m for m in models if m["key"] == "gemma-4-31b")
+        assert "Armenian" in gemma["description"]
+
+
+def test_armenian_override_none_for_english_and_hf():
+    """No override for English text, and never override an 'hf' user (ArmGPT is
+    Armenian-native already)."""
+    import bot.handlers
+
+    with patch("bot.handlers.ARMENIAN_MODEL", "gemma-4-31b"):
+        # English -> None (get_provider not even consulted)
+        assert bot.handlers._armenian_provider_override(1, "hello there") is None
+        with patch("bot.handlers.get_provider", return_value="hf"):
+            assert bot.handlers._armenian_provider_override(1, "Բարև") is None
+        with patch("bot.handlers.get_provider", return_value="main"):
+            assert bot.handlers._armenian_provider_override(1, "Բարև") == "gemma-4-31b"
+
+
 def test_active_model_reflects_provider():
     import bot.handlers
 
@@ -431,6 +497,7 @@ def test_cmd_model_no_args_shows_current_single_model():
 
     with (
         patch("bot.handlers.HF_SPACE_ID", ""),
+        patch("bot.handlers.ALT_CEREBRAS_MODELS", []),
         patch("bot.handlers.MODEL", "gpt-oss-120b"),
         patch("bot.handlers.get_provider", return_value="main"),
         patch("bot.handlers.bot") as mock_bot,
@@ -495,7 +562,7 @@ def test_cmd_model_switch_to_main():
         cmd_model(make_message(text="/model main"))
         mock_set.assert_called_once_with(123, "main")
         sent = mock_bot.send_message.call_args[0][1]
-        assert "Main" in sent
+        assert "Switched to" in sent
         assert "gpt-oss-120b" in sent
 
 
@@ -554,6 +621,7 @@ def test_cmd_models_single_model_no_switch_hint():
 
     with (
         patch("bot.handlers.HF_SPACE_ID", ""),
+        patch("bot.handlers.ALT_CEREBRAS_MODELS", []),
         patch("bot.handlers.MODEL", "qwen-3-235b-a22b-instruct-2507"),
         patch("bot.handlers.get_provider", return_value="main"),
         patch("bot.handlers.bot") as mock_bot,
@@ -909,17 +977,27 @@ def test_cmd_help_sends_one_message_per_category():
     import bot.handlers
 
     with (
+        patch("bot.handlers.HF_SPACE_ID", ""),
+        patch("bot.handlers.ALT_CEREBRAS_MODELS", ["gemma-4-31b", "zai-glm-4.7"]),
+        patch("bot.handlers.MODEL", "gpt-oss-120b"),
+        patch("bot.handlers.ARMENIAN_MODEL", "gemma-4-31b"),
+        patch("bot.handlers.get_provider", return_value="main"),
         patch("bot.handlers.send_reply") as mock_reply,
         patch("bot.handlers.bot"),
     ):
         from bot.handlers import cmd_help, COMMAND_CATEGORIES
 
         cmd_help(make_message(text="/help"))
-        # exactly one message per category, each led by the category title
-        assert mock_reply.call_count == len(COMMAND_CATEGORIES)
+        # one message per category, each led by its title...
         for call, (title, _cmds) in zip(mock_reply.call_args_list, COMMAND_CATEGORIES):
             text = call[0][1]
             assert title in text
+        # ...plus a trailing "AI models" message when >1 model is available
+        assert mock_reply.call_count == len(COMMAND_CATEGORIES) + 1
+        models_msg = mock_reply.call_args_list[-1][0][1]
+        assert "AI models" in models_msg
+        assert "gemma-4-31b" in models_msg
+        assert "Armenian" in models_msg
 
 
 def test_command_categories_have_no_duplicate_commands():

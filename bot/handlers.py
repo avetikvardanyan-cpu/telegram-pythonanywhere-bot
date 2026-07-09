@@ -28,8 +28,10 @@ from bot.config import (
     HF_SPACE_ID,
     HF_TOKEN,
     HOSTING_LABEL,
+    ARMENIAN_MODEL,
     IMAGE_TRANSLATE_MODEL,
     MODEL,
+    MODEL_INFO,
     RATE_LIMIT,
     TOGETHER_API_KEY,
     TOGETHER_EDIT_MODEL,
@@ -2976,6 +2978,24 @@ def cmd_help(message):
         body = "\n".join(f"/{name} — {desc}" for name, desc in cmds)
         send_reply(message, f"*{title}*\n{body}")
 
+    # A dedicated "AI models" message: what each model is good for and how to
+    # switch, since picking the right model per task is the main lever a user
+    # has over answer quality.
+    models = available_models()
+    if len(models) > 1:
+        active = active_model(message.from_user.id)
+        lines = ["*🧠 AI models* — switch with `/model <name>`"]
+        for m in models:
+            marker = "  ✅ (current)" if m["key"] == active["key"] else ""
+            lines.append(f"• *{m['name']}* — {m['description']}{marker}")
+        if ARMENIAN_MODEL:
+            lines.append(
+                f"\n💡 Write in Armenian and I'll automatically answer with "
+                f"*{ARMENIAN_MODEL}* (the best model for Armenian) for that "
+                f"message, then return to your chosen model."
+            )
+        send_reply(message, "\n".join(lines))
+
 
 @bot.message_handler(commands=["reset"], func=is_allowed)
 def cmd_reset(message):
@@ -3190,12 +3210,15 @@ def available_models():
     patch them."""
     models = [
         {"key": "main", "name": MODEL,
-         "description": "Cerebras — fast and multilingual, with conversation memory"},
+         "description": MODEL_INFO.get(
+             MODEL, "fast and multilingual, with conversation memory")},
     ]
     for model_id in ALT_CEREBRAS_MODELS:
+        if model_id == MODEL:
+            continue  # already listed as 'main'
         models.append(
             {"key": model_id, "name": model_id,
-             "description": "Cerebras — alternate model"}
+             "description": MODEL_INFO.get(model_id, "alternate Cerebras model")}
         )
     if HF_SPACE_ID:
         models.append(
@@ -3263,7 +3286,10 @@ def cmd_model(message):
             "does not understand English. Replies take ~30-60s and there is no memory.",
         )
     else:
-        bot.send_message(message.chat.id, f"Switched to Main ({model['name']}).")
+        bot.send_message(
+            message.chat.id,
+            f"Switched to {model['name']} — {model['description']}.",
+        )
 
 
 @bot.message_handler(commands=["models"], func=is_allowed)
@@ -3277,6 +3303,23 @@ def cmd_models(message):
     if len(available_models()) > 1:
         text += "\n\nSwitch with /model <name>."
     bot.send_message(message.chat.id, text)
+
+
+def _armenian_provider_override(user_id, text):
+    """When the user writes Armenian, answer this one message with ARMENIAN_MODEL
+    (accurate on Armenian) without touching their saved model. Returns a
+    provider key to use for this call, or None to use their saved preference.
+
+    None is returned — i.e. keep their model — when there's no Armenian, when
+    ARMENIAN_MODEL is disabled, when they're already on it, or when they're on
+    'hf' (ArmGPT is itself Armenian-native).
+    """
+    if not ARMENIAN_MODEL or not _has_armenian(text):
+        return None
+    current = get_provider(user_id)
+    if current in ("hf", ARMENIAN_MODEL):
+        return None
+    return ARMENIAN_MODEL
 
 
 @bot.message_handler(content_types=["text"], func=is_allowed)
@@ -3295,9 +3338,10 @@ def handle_message(message):
         _log(message, "out", f"[rate limited] {limit_msg}")
         return
     _record_turn(message.from_user.id, "You", text)  # save for /pdf export
+    provider = _armenian_provider_override(message.from_user.id, text)
     try:
         with keep_typing(message.chat.id):
-            reply = ask_ai(message.from_user.id, text)
+            reply = ask_ai(message.from_user.id, text, provider=provider)
         send_reply(message, reply)
         _record_turn(message.from_user.id, "Bot", reply)
         _log(message, "out", reply)

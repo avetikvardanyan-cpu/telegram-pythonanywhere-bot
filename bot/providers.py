@@ -102,9 +102,15 @@ def _call_hf(messages: list) -> str:
     return text or "(empty response from ArmGPT)"
 
 
-def generate(user_id: int, messages: list) -> str:
-    """Dispatch to the user's chosen AI provider and return a reply string."""
-    provider = get_provider(user_id)
+def generate(user_id: int, messages: list, provider: str = None) -> str:
+    """Dispatch to an AI provider and return a reply string.
+
+    `provider` overrides the user's saved preference for this one call (used to
+    auto-answer Armenian messages with a better model without changing their
+    chosen model). When None, the saved preference is used.
+    """
+    if provider is None:
+        provider = get_provider(user_id)
     if provider == "hf":
         return _call_hf(messages)
     if provider == "main":

@@ -3,7 +3,7 @@ from bot.history import get_history, save_history
 from bot.providers import generate
 
 
-def ask_ai(user_id: int, user_message: str) -> str:
+def ask_ai(user_id: int, user_message: str, provider: str = None) -> str:
     history = get_history(user_id)
     history.append({"role": "user", "content": user_message})
 
@@ -16,7 +16,7 @@ def ask_ai(user_id: int, user_message: str) -> str:
     # same update forever and the bot appears dead). Return a friendly message
     # instead, and don't pollute history with a failed turn.
     try:
-        reply = generate(user_id, messages)
+        reply = generate(user_id, messages, provider=provider)
     except Exception as e:
         print(f"AI generation failed: {e}")
         return "Sorry, I couldn't reach the AI just now. Please try again in a moment."

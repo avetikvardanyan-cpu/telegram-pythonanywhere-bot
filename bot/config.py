@@ -84,22 +84,38 @@ AI_API_KEY = os.environ["AI_API_KEY"].strip()
 AI_BASE_URL = os.environ.get("AI_BASE_URL", "https://api.cerebras.ai/v1").strip()
 MODEL = os.environ.get("AI_MODEL", "gpt-oss-120b").strip()
 
+# The Cerebras model that handles Armenian well. gpt-oss-120b (the chat MODEL)
+# translates Armenian poorly — it dropped "elephant" and hallucinated
+# "crater"/"pumpkin" in testing — whereas gemma-4-31b is accurate. Used to
+# (1) translate Armenian /image + /edit prompts to English and (2) auto-answer
+# Armenian chat messages (see bot/handlers.py::_armenian_provider_override).
+ARMENIAN_MODEL = os.environ.get("ARMENIAN_MODEL", "gemma-4-31b").strip()
+
 # Model used to translate non-English (currently Armenian) /image and /edit
-# prompts into English before they hit the image backend. This is deliberately
-# NOT the chat MODEL: gpt-oss-120b translates Armenian poorly (it dropped
-# "elephant" and hallucinated "crater"/"pumpkin" in testing), whereas
-# gemma-4-31b renders Armenian prompts accurately. If the account can't access
-# this id, _translate_prompt_for_image() falls back to MODEL, then to the
-# original prompt, so /image never breaks. Set IMAGE_TRANSLATE_MODEL="" to
-# disable the dedicated translator and just use MODEL.
-IMAGE_TRANSLATE_MODEL = os.environ.get("IMAGE_TRANSLATE_MODEL", "gemma-4-31b").strip()
+# prompts into English before they hit the image backend. Defaults to
+# ARMENIAN_MODEL. If the account can't access this id,
+# _translate_prompt_for_image() falls back to MODEL, then to the original
+# prompt, so /image never breaks. Set IMAGE_TRANSLATE_MODEL="" to just use MODEL.
+IMAGE_TRANSLATE_MODEL = os.environ.get("IMAGE_TRANSLATE_MODEL", ARMENIAN_MODEL).strip()
+
+# Human-readable strengths for the Cerebras models this bot offers, shown by
+# /models and /help. Keyed by model id. A model not listed here still works —
+# it just gets a generic description.
+MODEL_INFO = {
+    "gpt-oss-120b": "strong all-round reasoning + coding at Cerebras speed — best for English and code (default)",
+    "gemma-4-31b": "best at Armenian & other non-English languages — accurate, natural replies (auto-used when you write in Armenian)",
+    "zai-glm-4.7": "strong multilingual reasoning — good for longer, detailed answers",
+}
 
 # Extra Cerebras model ids the account can access, offered as switchable
-# options by /model and /models (comma-separated). Empty by default — only add
-# ids your AI_API_KEY actually has access to, or /model <id> will 404 and fall
-# back to MODEL. Example: ALT_CEREBRAS_MODELS=qwen-3-235b-a22b-instruct-2507
+# options by /model and /models (comma-separated). Defaults to the extra models
+# this key has (gemma-4-31b, zai-glm-4.7) alongside the default gpt-oss-120b.
+# Only list ids your AI_API_KEY actually has access to, or /model <id> will 404
+# and fall back to MODEL. Override via the ALT_CEREBRAS_MODELS env var.
 ALT_CEREBRAS_MODELS = [
-    m.strip() for m in os.environ.get("ALT_CEREBRAS_MODELS", "").split(",") if m.strip()
+    m.strip()
+    for m in os.environ.get("ALT_CEREBRAS_MODELS", "gemma-4-31b,zai-glm-4.7").split(",")
+    if m.strip()
 ]
 
 # Hugging Face provider (optional) — when set, users can switch via /model
