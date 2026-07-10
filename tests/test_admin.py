@@ -117,6 +117,29 @@ def test_say_delivers_to_target():
     assert first[1] == "hello there"
 
 
+def test_whoami_reports_identity_and_admin():
+    mock_bot = MagicMock()
+    with patch("bot.helpers.bot", mock_bot):  # cmd_whoami renders via send_reply
+        from bot.handlers import cmd_whoami
+
+        cmd_whoami(_message(user_id=777, username="Avetik_11", first_name="Avetik"))
+        body = mock_bot.send_message.call_args[0][1]
+        assert "777" in body
+        assert "@Avetik_11" in body
+        assert "yes" in body
+
+
+def test_whoami_flags_non_admin_with_setup_hint():
+    mock_bot = MagicMock()
+    with patch("bot.helpers.bot", mock_bot):
+        from bot.handlers import cmd_whoami
+
+        cmd_whoami(_message(user_id=888, username="randomkid"))
+        body = mock_bot.send_message.call_args[0][1]
+        assert "888" in body
+        assert "ADMIN_USERS" in body
+
+
 def test_admin_panel_lists_commands():
     # cmd_admin renders via send_reply(), which sends through bot.helpers.bot.
     mock_bot = MagicMock()

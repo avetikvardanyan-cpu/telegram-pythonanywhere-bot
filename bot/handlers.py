@@ -3352,13 +3352,41 @@ def handle_message(message):
         _log(message, "out", f"[error] {e}")
 
 
+@bot.message_handler(commands=["whoami"], func=is_allowed)
+def cmd_whoami(message):
+    """Report the sender's own Telegram identity + whether they're an admin.
+
+    Available to everyone (it only reveals your own id/username). This is
+    the setup helper for the admin panel: matching by numeric user id is
+    the most reliable way to configure ADMIN_USERS, since a Telegram
+    username can be unset or changed."""
+    user = message.from_user
+    username = f"@{user.username}" if getattr(user, "username", "") else "(none set)"
+    admin = is_admin(message)
+    lines = [
+        "👤 *Your Telegram identity*",
+        f"• User ID: `{user.id}`",
+        f"• Username: {username}",
+        f"• Name: {getattr(user, 'first_name', '') or '—'}",
+        f"• Admin: {'yes ✅' if admin else 'no'}",
+    ]
+    if not admin:
+        lines.append(
+            "\nTo get admin access, set `ADMIN_USERS` in the server's `.env` "
+            "to your *User ID* above (most reliable) or your username, then "
+            "reload the web app."
+        )
+    send_reply(message, "\n".join(lines))
+
+
 # --- Admin panel ------------------------------------------------------------
 # Owner-only management commands, gated by func=is_admin (ADMIN_USERS in
 # bot/config.py, default @Avetik_11). Deliberately NOT listed in
 # COMMAND_CATEGORIES / the "/" autocomplete menu so they stay hidden from
 # ordinary users; /admin is the discoverable entry point for the admin.
-# User tracking that powers /stats, /users, and /broadcast lives in
-# bot/users.py and is recorded once per update from the webhook.
+# /whoami (above) is available to everyone and reports your id/username so
+# you can configure ADMIN_USERS reliably. User tracking that powers /stats,
+# /users, and /broadcast lives in bot/users.py, recorded from the webhook.
 
 # Admin command list, rendered by /admin. (command, description).
 _ADMIN_COMMANDS = [
