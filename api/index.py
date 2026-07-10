@@ -100,6 +100,16 @@ def webhook():
             # Already claimed by another delivery or a prior successful run.
             return "OK", 200
 
+    # Record the sender in the roster so the admin panel can show stats /
+    # broadcast. Once per update (dedupe already ran), best-effort — never
+    # let roster bookkeeping break message handling.
+    try:
+        from bot.users import record_from_update
+
+        record_from_update(update)
+    except Exception as e:
+        print(f"user tracking error: {e}")
+
     try:
         bot.process_new_updates([update])
     except Exception:

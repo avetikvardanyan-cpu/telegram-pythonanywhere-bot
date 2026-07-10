@@ -11,7 +11,7 @@ import secrets
 import string
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from urllib.parse import quote, unquote
 from bot.clients import bot, BOT_INFO, store
 from bot.config import (
@@ -38,10 +38,11 @@ from bot.config import (
     TOGETHER_IMAGE_MODEL,
 )
 from bot.ai import ask_ai
-from bot.helpers import is_allowed, keep_typing, send_reply, should_respond
+from bot.helpers import is_admin, is_allowed, keep_typing, send_reply, should_respond
 from bot.history import clear_history
 from bot.preferences import get_provider, set_provider
 from bot.rate_limit import is_rate_limited
+from bot.users import all_users, user_count
 
 
 VERBOSE_LOG = os.environ.get("BOT_VERBOSE_LOG", "").strip().lower() in (
@@ -3349,3 +3350,195 @@ def handle_message(message):
         print(f"Error in handle_message: {e}")
         bot.send_message(message.chat.id, "Something went wrong. Please try again.")
         _log(message, "out", f"[error] {e}")
+
+
+# --- Admin panel ------------------------------------------------------------
+# Owner-only management commands, gated by func=is_admin (ADMIN_USERS in
+# bot/config.py, default @Avetik_11). Deliberately NOT listed in
+# COMMAND_CATEGORIES / the "/" autocomplete menu so they stay hidden from
+# ordinary users; /admin is the discoverable entry point for the admin.
+# User tracking that powers /stats, /users, and /broadcast lives in
+# bot/users.py and is recorded once per update from the webhook.
+
+# Admin command list, rendered by /admin. (command, description).
+_ADMIN_COMMANDS = [
+    ("admin", "show this admin panel"),
+    ("stats", "usage statistics"),
+    ("users", "list known users"),
+    ("broadcast", "message every known user — /broadcast <text>"),
+    ("say", "DM one user — /say <user_id> <text>"),
+]
+
+
+def _admin_name(message):
+    """Best display name for the admin, for the panel header."""
+    user = message.from_user
+    if getattr(user, "username", ""):
+        return f"@{user.username}"
+    return getattr(user, "first_name", None) or f"user {user.id}"
+
+
+def _messages_today():
+    """Sum today's per-user message counters across the roster.
+
+    The rate limiter stores a `rate:<id>:<date>` counter per user; there's
+    no key scan in the store, so we read one counter per known user. Returns
+    (total, active_user_count)."""
+    if store is None:
+        return 0, 0
+    today = date.today()
+    total = 0
+    active = 0
+    for user in all_users():
+        try:
+            raw = store.get(f"rate:{user['id']}:{today}")
+        except Exception:
+            raw = None
+        if raw:
+            n = int(raw)
+            total += n
+            active += 1
+    return total, active
+
+
+@bot.message_handler(commands=["admin"], func=is_admin)
+def cmd_admin(message):
+    if store is None:
+        storage_line = "stateless (no user tracking, stats, or broadcast)"
+    else:
+        storage_line = "SQLite"
+    total_today, active_today = _messages_today()
+    lines = [
+        f"🔧 *Admin panel* — {_admin_name(message)}",
+        "",
+        "*Status*",
+        f"• Known users: {user_count()}",
+        f"• Messages today: {total_today} (from {active_today} user(s))",
+        f"• Model: {MODEL}",
+        f"• Storage: {storage_line}",
+        f"• Rate limit: {RATE_LIMIT}/user/day",
+    ]
+    if COMMIT_SHA:
+        lines.append(f"• Version: {COMMIT_SHA}")
+    lines.append("")
+    lines.append("*Commands*")
+    for name, desc in _ADMIN_COMMANDS:
+        lines.append(f"/{name} — {desc}")
+    send_reply(message, "\n".join(lines))
+
+
+@bot.message_handler(commands=["stats"], func=is_admin)
+def cmd_stats(message):
+    if store is None:
+        bot.send_message(
+            message.chat.id,
+            "Stats need storage (SQLITE_PATH), which isn't set up right now.",
+        )
+        return
+    users = all_users()
+    total_today, active_today = _messages_today()
+    with_username = sum(1 for u in users if u.get("username"))
+    lines = [
+        "📊 *Bot statistics*",
+        f"• Known users: {len(users)}",
+        f"• With a @username: {with_username}",
+        f"• Active today: {active_today}",
+        f"• Messages today: {total_today}",
+        f"• Model: {MODEL}",
+        f"• Hosting: {HOSTING_LABEL}",
+    ]
+    if COMMIT_SHA:
+        lines.append(f"• Version: {COMMIT_SHA}")
+    send_reply(message, "\n".join(lines))
+
+
+def _format_last_seen(ts):
+    if not ts:
+        return "?"
+    try:
+        return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+    except (ValueError, OverflowError, OSError):
+        return "?"
+
+
+@bot.message_handler(commands=["users"], func=is_admin)
+def cmd_users(message):
+    if store is None:
+        bot.send_message(
+            message.chat.id,
+            "The user list needs storage (SQLITE_PATH), which isn't set up right now.",
+        )
+        return
+    users = all_users()
+    if not users:
+        bot.send_message(message.chat.id, "No users recorded yet.")
+        return
+    limit = 100  # keep the reply bounded; most recent first
+    shown = users[:limit]
+    lines = [f"👥 *Known users* ({len(users)} total, showing {len(shown)})", ""]
+    for i, user in enumerate(shown, start=1):
+        handle = f"@{user['username']}" if user.get("username") else (user.get("first_name") or "—")
+        lines.append(
+            f"{i}. {handle}  `{user['id']}`  · last seen {_format_last_seen(user.get('last_seen'))}"
+        )
+    if len(users) > limit:
+        lines.append(f"\n…and {len(users) - limit} more.")
+    send_reply(message, "\n".join(lines))
+
+
+@bot.message_handler(commands=["broadcast"], func=is_admin)
+def cmd_broadcast(message):
+    if store is None:
+        bot.send_message(
+            message.chat.id,
+            "Broadcast needs storage (SQLITE_PATH), which isn't set up right now.",
+        )
+        return
+    text = _arg(message)
+    if not text:
+        bot.send_message(
+            message.chat.id,
+            "Usage: /broadcast <message>\nSends your message to every known user.",
+        )
+        return
+    users = all_users()
+    if not users:
+        bot.send_message(message.chat.id, "No users to broadcast to yet.")
+        return
+    sent = 0
+    failed = 0
+    for user in users:
+        try:
+            bot.send_message(int(user["id"]), text)
+            sent += 1
+        except Exception as e:
+            failed += 1
+            print(f"broadcast to {user.get('id')} failed: {e}")
+        time.sleep(0.05)  # stay under Telegram's ~30 msg/s bulk limit
+    bot.send_message(
+        message.chat.id,
+        f"📣 Broadcast done — delivered to {sent} user(s)"
+        + (f", {failed} failed." if failed else "."),
+    )
+
+
+@bot.message_handler(commands=["say"], func=is_admin)
+def cmd_say(message):
+    parts = (message.text or "").split(maxsplit=2)
+    if len(parts) < 3 or not parts[2].strip():
+        bot.send_message(
+            message.chat.id,
+            "Usage: /say <user_id> <message>\nExample: /say 123456789 Hello there!",
+        )
+        return
+    target, text = parts[1].strip(), parts[2].strip()
+    if not target.lstrip("-").isdigit():
+        bot.send_message(message.chat.id, f"Invalid user id: {target}. Use a numeric id (see /users).")
+        return
+    try:
+        bot.send_message(int(target), text)
+    except Exception as e:
+        print(f"/say to {target} failed: {e}")
+        bot.send_message(message.chat.id, f"Couldn't deliver to {target}: {e}")
+        return
+    bot.send_message(message.chat.id, f"✅ Sent to {target}.")

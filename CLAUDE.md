@@ -28,6 +28,7 @@ telegram-pythonanywhere-bot/
 │   ├── preferences.py    # Per-user provider preference stored via store
 │   ├── history.py        # get/save/clear conversation history via store (graceful degradation)
 │   ├── rate_limit.py     # Per-user daily message rate limiting via store (graceful degradation)
+│   ├── users.py          # Known-user roster for the admin panel (graceful degradation)
 │   ├── dedupe.py         # Drops repeated update_ids when Telegram retries (graceful degradation)
 │   ├── helpers.py        # send_reply(), keep_typing() context manager, should_respond() utilities
 │   └── handlers.py       # All Telegram command and message handlers — add new commands here
@@ -41,6 +42,8 @@ telegram-pythonanywhere-bot/
 │   ├── test_history.py
 │   ├── test_rate_limit.py
 │   ├── test_dedupe.py
+│   ├── test_users.py     # User roster (record/list/count + stateless degradation)
+│   ├── test_admin.py     # Admin gate (is_admin/is_allowed) + /admin panel commands
 │   ├── test_store.py     # Direct SqliteStore tests (get/set/delete/incr/expire + TTL)
 │   ├── test_deploy.py    # /api/deploy auto-deploy webhook (secret verification + git pull)
 │   └── test_webhook.py
@@ -100,6 +103,7 @@ telegram-pythonanywhere-bot/
 | `WEBHOOK_URL` | No | — | When set, the bot auto-registers this URL as the Telegram webhook on every worker boot and after every `/api/deploy`. No manual `setWebhook` step needed. Idempotent. On PA, value is `https://<your-pa-username>.pythonanywhere.com/api/webhook`. Leave unset for local polling |
 | `RATE_LIMIT` | No | `250` | Max messages per user per day |
 | `ALLOWED_USERS` | No | _open_ | Comma-separated whitelist of usernames (with/without `@`) or numeric user IDs. Empty = everyone allowed. Non-empty = silent drop for non-whitelisted (no rejection reply, no leak of bot existence). Implemented as `func=is_allowed` on every `@bot.message_handler` so telebot never dispatches the handler |
+| `ADMIN_USERS` | No | `Avetik_11` | Comma-separated admins (username with/without `@`, or numeric id — same format as `ALLOWED_USERS`). Admins get the `/admin` panel + management commands (`/stats`, `/users`, `/broadcast`, `/say`) and are always allowed to talk to the bot even when `ALLOWED_USERS` is a non-empty whitelist (so the owner can't lock themselves out). Gated via `func=is_admin` (`bot/helpers.py`). Set to `""` to disable the admin panel entirely. See "Admin panel" below |
 | `HOSTING_LABEL` | No | `PythonAnywhere` | Label shown by the `/about` command |
 | `DEPLOY_SECRET` | No | — | Enables `/api/deploy` auto-deploy webhook. Fail-closed: when unset, the endpoint returns 403. Generate with `openssl rand -hex 32` and set the same value as a GitHub repo secret named `DEPLOY_SECRET` so the workflow at `.github/workflows/deploy.yml` can call the endpoint |
 | `PA_WSGI_PATH` | No | _auto-detected_ | Absolute path of the PA WSGI file `/api/deploy` touches to reload the worker. Only needed when auto-detection fails (non-default PA layout / custom domain) — the deploy response says so explicitly when that happens |
@@ -195,6 +199,22 @@ The bot's storage layer is a thin KV-with-TTL abstraction in `bot/store.py` expo
 - **`SQLITE_PATH` set:** `SqliteStore` opens the DB in WAL mode with `check_same_thread=False`. The schema is a single `kv(key, value, expires_at)` table; expired rows are filtered on read and overwritten on write — no background sweeper, never affects correctness.
 - **Graceful degradation under runtime failure:** every store call in the consumer modules is wrapped in try-except. On failure: same fallbacks as stateless mode, plus an error log line.
 - **Performance vs. networked KV:** SQLite ops are in-process and take microseconds, vs. ~20–80ms per round-trip to a remote KV over HTTPS. The webhook reply latency for an average message is dominated by the AI call, not storage.
+
+---
+
+## Admin panel
+
+Owner-only management commands, gated by `func=is_admin` (`bot/helpers.py`), configured via `ADMIN_USERS` (default `Avetik_11`). Non-admins fail the filter, so telebot never dispatches these handlers — an admin command typed by a non-admin just falls through to normal text handling (like any unknown command), so the panel's existence isn't confirmed to them. The commands are deliberately **not** in `COMMAND_CATEGORIES`, so they don't appear in `/help` or the `/` autocomplete menu; `/admin` is the discoverable entry point for admins.
+
+Commands (`bot/handlers.py`, at the end of the file):
+
+- **`/admin`** — the panel: live status (known users, messages today, model, storage, rate limit, version) + the admin command list.
+- **`/stats`** — usage statistics (known users, how many have a `@username`, active-today count, messages today).
+- **`/users`** — the known-user roster (most recent first, capped at 100 in the reply), each with `@handle`, numeric id, and last-seen time.
+- **`/broadcast <text>`** — send `<text>` to every known user, with a `time.sleep(0.05)` between sends to stay under Telegram's ~30 msg/s bulk limit; reports delivered/failed counts.
+- **`/say <user_id> <text>`** — DM a single user by numeric id (get ids from `/users`).
+
+**User roster (`bot/users.py`).** The bot otherwise has no list of *who* has used it (history/rate limits are keyed per id but there's no index). `bot/users.py` keeps a lightweight roster in the same KV store: a `users:index` JSON list of id strings + one `user:<id>` record each (username, first name, last-seen). `record_from_update()` is called once per update from the webhook in `api/index.py` (after the dedupe claim, so never twice), best-effort and wrapped so roster bookkeeping can't break message handling. It follows the same graceful-degradation pattern as `history`/`preferences`/`rate_limit`: every function no-ops / returns safe defaults in stateless mode (`SQLITE_PATH` unset) or on a store error — so `/stats`, `/users`, and `/broadcast` report "needs storage" rather than crashing. `/stats`'s "messages today" is computed by reading each roster user's `rate:<id>:<today>` counter (the store has no key scan), so it's exact but O(users).
 
 ---
 

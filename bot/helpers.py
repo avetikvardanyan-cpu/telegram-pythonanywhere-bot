@@ -1,12 +1,14 @@
 import threading
 from contextlib import contextmanager
 from bot.clients import bot
-from bot.config import ALLOWED_USERS, MAX_MSG_LEN
+from bot.config import ADMIN_USERS, ALLOWED_USERS, MAX_MSG_LEN
 
 # Pre-compute lookup sets so per-message is_allowed() is O(1).
 # Numeric IDs are matched as strings against str(user.id).
 _ALLOWED_USERNAMES = {u.lower() for u in ALLOWED_USERS if not u.isdigit()}
 _ALLOWED_USER_IDS = {u for u in ALLOWED_USERS if u.isdigit()}
+_ADMIN_USERNAMES = {u.lower() for u in ADMIN_USERS if not u.isdigit()}
+_ADMIN_USER_IDS = {u for u in ADMIN_USERS if u.isdigit()}
 
 # Telegram "typing" chat action expires after ~5 seconds, so re-send it every
 # 4 seconds while slow providers (e.g. HF ArmGPT) are generating.
@@ -101,6 +103,11 @@ def is_allowed(message) -> bool:
     """
     if not ALLOWED_USERS:
         return True
+    # Admins are always allowed, even when they aren't in a non-empty
+    # ALLOWED_USERS whitelist — otherwise the owner could lock themselves
+    # out of the very bot they administer.
+    if is_admin(message):
+        return True
     user = getattr(message, "from_user", None)
     if user is None:
         return False
@@ -108,3 +115,24 @@ def is_allowed(message) -> bool:
         return True
     username = getattr(user, "username", "") or ""
     return username.lower() in _ALLOWED_USERNAMES
+
+
+def is_admin(message) -> bool:
+    """Telegram-handler `func=` filter that gates the admin panel.
+
+    Returns True only when the sender's numeric user_id or username
+    (case-insensitive) is in ADMIN_USERS. Non-admins fail the filter, so
+    telebot never dispatches an admin handler for them — the message
+    instead falls through to normal handling (an unknown admin command
+    is treated like any other text), so the panel's existence isn't
+    confirmed to non-admins.
+    """
+    if not ADMIN_USERS:
+        return False
+    user = getattr(message, "from_user", None)
+    if user is None:
+        return False
+    if str(getattr(user, "id", "")) in _ADMIN_USER_IDS:
+        return True
+    username = getattr(user, "username", "") or ""
+    return username.lower() in _ADMIN_USERNAMES

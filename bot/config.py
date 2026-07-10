@@ -235,6 +235,18 @@ ALLOWED_USERS = [
     for u in os.environ.get("ALLOWED_USERS", "").split(",")
     if u.strip()
 ]
+
+# Comma-separated list of admins, same format as ALLOWED_USERS (username
+# with/without @, or numeric user id). Admins get the /admin panel and its
+# management commands (/stats, /users, /broadcast, /say) and are always
+# allowed to talk to the bot even when ALLOWED_USERS is a non-empty
+# whitelist. Defaults to the project owner so the panel works out of the
+# box; override via the ADMIN_USERS env var. Set to "" to disable admin.
+ADMIN_USERS = [
+    u.strip().lstrip("@")
+    for u in os.environ.get("ADMIN_USERS", "Avetik_11").split(",")
+    if u.strip()
+]
 MAX_MSG_LEN = 4096  # Telegram's character limit per message
 # Provider call budget. Total worst case =
 # AI_RETRIES * AI_REQUEST_TIMEOUT + sum of backoff sleeps. With
