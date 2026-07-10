@@ -117,6 +117,23 @@ def test_say_delivers_to_target():
     assert first[1] == "hello there"
 
 
+def test_text_catchall_registered_last():
+    """The content_types=['text'] catch-all matches ANY text message,
+    including commands. telebot dispatches the first handler that matches
+    in registration (= source) order, so a command handler placed after
+    the catch-all is shadowed and never fires. Guard against reintroducing
+    that bug (it once ate /admin and /whoami)."""
+    import bot.handlers as h
+
+    with open(h.__file__, encoding="utf-8") as f:
+        src = f.read()
+    idx = src.index('@bot.message_handler(content_types=["text"]')
+    assert "@bot.message_handler(commands=[" not in src[idx:], (
+        "a command handler is registered after the text catch-all — it will "
+        "be shadowed. Move it above the handle_message handler."
+    )
+
+
 def test_whoami_reports_identity_and_admin():
     mock_bot = MagicMock()
     with patch("bot.helpers.bot", mock_bot):  # cmd_whoami renders via send_reply

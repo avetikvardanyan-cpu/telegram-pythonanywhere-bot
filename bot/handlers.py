@@ -3323,35 +3323,6 @@ def _armenian_provider_override(user_id, text):
     return ARMENIAN_MODEL
 
 
-@bot.message_handler(content_types=["text"], func=is_allowed)
-def handle_message(message):
-    if not should_respond(message):
-        return
-    text = (message.text or "").replace(f"@{BOT_INFO.username}", "").strip()
-    if not text:
-        # Edited messages, forwards, or stickers-with-empty-caption can
-        # arrive with no usable text. Don't burn rate-limit / AI calls on them.
-        return
-    _log(message, "in", text)
-    if is_rate_limited(message.from_user.id):
-        limit_msg = f"You've reached the daily limit of {RATE_LIMIT} messages. Try again tomorrow."
-        bot.send_message(message.chat.id, limit_msg)
-        _log(message, "out", f"[rate limited] {limit_msg}")
-        return
-    _record_turn(message.from_user.id, "You", text)  # save for /pdf export
-    provider = _armenian_provider_override(message.from_user.id, text)
-    try:
-        with keep_typing(message.chat.id):
-            reply = ask_ai(message.from_user.id, text, provider=provider)
-        send_reply(message, reply)
-        _record_turn(message.from_user.id, "Bot", reply)
-        _log(message, "out", reply)
-    except Exception as e:
-        print(f"Error in handle_message: {e}")
-        bot.send_message(message.chat.id, "Something went wrong. Please try again.")
-        _log(message, "out", f"[error] {e}")
-
-
 @bot.message_handler(commands=["whoami"], func=is_allowed)
 def cmd_whoami(message):
     """Report the sender's own Telegram identity + whether they're an admin.
@@ -3570,3 +3541,39 @@ def cmd_say(message):
         bot.send_message(message.chat.id, f"Couldn't deliver to {target}: {e}")
         return
     bot.send_message(message.chat.id, f"✅ Sent to {target}.")
+
+
+# --- Free-text chat handler -------------------------------------------------
+# MUST stay the LAST-registered message handler. telebot dispatches the first
+# handler that matches in registration order, and this one matches *any* text
+# message (including commands, which are just text). Registering it after all
+# command handlers is what lets /joke, /admin, /whoami, etc. win first; a
+# command handler placed after this would be shadowed and never fire.
+
+@bot.message_handler(content_types=["text"], func=is_allowed)
+def handle_message(message):
+    if not should_respond(message):
+        return
+    text = (message.text or "").replace(f"@{BOT_INFO.username}", "").strip()
+    if not text:
+        # Edited messages, forwards, or stickers-with-empty-caption can
+        # arrive with no usable text. Don't burn rate-limit / AI calls on them.
+        return
+    _log(message, "in", text)
+    if is_rate_limited(message.from_user.id):
+        limit_msg = f"You've reached the daily limit of {RATE_LIMIT} messages. Try again tomorrow."
+        bot.send_message(message.chat.id, limit_msg)
+        _log(message, "out", f"[rate limited] {limit_msg}")
+        return
+    _record_turn(message.from_user.id, "You", text)  # save for /pdf export
+    provider = _armenian_provider_override(message.from_user.id, text)
+    try:
+        with keep_typing(message.chat.id):
+            reply = ask_ai(message.from_user.id, text, provider=provider)
+        send_reply(message, reply)
+        _record_turn(message.from_user.id, "Bot", reply)
+        _log(message, "out", reply)
+    except Exception as e:
+        print(f"Error in handle_message: {e}")
+        bot.send_message(message.chat.id, "Something went wrong. Please try again.")
+        _log(message, "out", f"[error] {e}")
